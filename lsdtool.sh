@@ -9,11 +9,12 @@ fi
 
 SOURCE="$(realpath "${0}")"
 SCRIPT_DIR="$(dirname "${SOURCE}")"
+DOCKER_IMAGE_ID="${SCRIPT_DIR}/utils/.docker-image-id"
+CONTAINER_IMAGE_ID="${SCRIPT_DIR}/utils/.container-image-id"
+CONTAINER_IMAGE_RECIPIE="${SCRIPT_DIR}/Dockerfile"
 
 JDK_URL="https://gitlab.com/alelec/mib2-lsd-patching/-/raw/main/ibm-java-ws-sdk-pxi3260sr4ifx.zip"
 
-CONTAINER_IMAGE_ID="${SCRIPT_DIR}/utils/.container-image-id"
-CONTAINER_IMAGE_RECIPIE="${SCRIPT_DIR}/Dockerfile"
 
 has_long_params() {
      [[ "$(getopt -o h --long help --name test -- --help 2>/dev/null | tr -d ' ')" == "--help--" ]]
@@ -89,14 +90,33 @@ d_exists() {
     fi
 }
 
-# TODO add support for apple containers
-container_prepare() {
+is_wsl() {
+    grep -qiE '(microsoft|wsl)' /proc/sys/kernel/osrelease 2>/dev/null || \
+    grep -qi 'microsoft' /proc/version 2>/dev/null || \
+    [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]
+}
+
+is_mac() {
+    [[ "$(uname -s)" == "Darwin" ]]
+}
+
+docker_prepare() {
     has_command docker
+    if [[ -e "${CONTAINER_IMAGE_ID}" ]] && [[ "${CONTAINER_IMAGE_RECIPIE}" -ot "${DOCKER_IMAGE_ID}" ]]; then
+        return 0
+    fi
+
+    docker build --platform linux/amd64 -f "${CONTAINER_IMAGE_RECIPIE}" --iidfile "${DOCKER_IMAGE_ID}" .
+}
+
+container_prepare() {
+    is_mac
+    has_command container
     if [[ -e "${CONTAINER_IMAGE_ID}" ]] && [[ "${CONTAINER_IMAGE_RECIPIE}" -ot "${CONTAINER_IMAGE_ID}" ]]; then
         return 0
     fi
 
-    docker build --platform linux/amd64 -f "${CONTAINER_IMAGE_RECIPIE}" --iidfile "${CONTAINER_IMAGE_ID}" .
+    container build --os linux --arch amd64 -f "${CONTAINER_IMAGE_RECIPIE}" . | cut -c20- > "${CONTAINER_IMAGE_ID}"
 }
 
 x86() {
@@ -112,8 +132,14 @@ x86() {
         fi
     done
 
-    if "${CONTENERIZED}"; then
-        docker run --platform linux/amd64 --rm -it ${paths[*]} -v "${SCRIPT_DIR}":/opt/lsdtool --workdir /opt/lsdtool "$(cat "${CONTAINER_IMAGE_ID}")" "${@}"
+    if "${IN_CONTAINER}"; then
+        if "${APPLE_CONTAINER}"; then
+            # shellcheck disable=SC2086,SC2048
+            container run --os linux --arch amd64 --rm -it ${paths[*]} -v "${SCRIPT_DIR}":/opt/lsdtool --workdir /opt/lsdtool "$(cat "${CONTAINER_IMAGE_ID}")" "${@}"
+        else
+            # shellcheck disable=SC2086,SC2048
+            docker run --platform linux/amd64 --rm -it ${paths[*]} -v "${SCRIPT_DIR}":/opt/lsdtool --workdir /opt/lsdtool "$(cat "${DOCKER_IMAGE_ID}")" "${@}"
+        fi
     else
         "${@}"
     fi
@@ -132,7 +158,7 @@ getjdk() {
         return 0
     fi
 
-    if ! "${CONTENERIZED}"; then
+    if ! "${IN_CONTAINER}"; then
         has_command patchelf
     fi
     has_command curl
@@ -140,6 +166,7 @@ getjdk() {
 
     local tmp_jdk
     tmp_jdk="$(mktemp)"
+    # shellcheck disable=SC2064
     trap "rm -f '${tmp_jdk}'" RETURN EXIT SIGINT
 
     echo "Downloading 32-bit JDK..."
@@ -265,28 +292,9 @@ cleanup_java() {
         ' "$java_file" > "$java_file.tmp" && mv "$java_file.tmp" "$java_file"
 }
 
-is_wsl() {
-    # Kernel identifiers
-    if grep -qiE '(microsoft|wsl)' /proc/sys/kernel/osrelease 2>/dev/null; then
-        return 0
-    fi
-    if grep -qi 'microsoft' /proc/version 2>/dev/null; then
-        return 0
-    fi
-
-    # Env hints set by WSL
-    if [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]; then
-        return 0
-    fi
-    return 1
-}
-
 ### Defaults ###
-CONTENERIZED=false
-if [ "$(uname -s)" == "Darwin" ]; then
-    # Enable docker mode by default on MacOS
-    CONTENERIZED=true
-fi
+IN_CONTAINER="$(is_mac && echo true || echo false)"
+APPLE_CONTAINER="$(is_mac && has_command container && echo true || echo false)"
 CLEANUP=true
 MODE=""
 
@@ -331,7 +339,7 @@ while true; do
                 echo "Docker mode is not available on WSL!" >&2
                 exit 1
             fi
-            CONTENERIZED=true
+            IN_CONTAINER=true
             shift
             ;;
         --)
@@ -385,25 +393,27 @@ if [[ "${MODE}" == "install" ]]; then # TODO extract to install.sh?
 fi
 
 ### Preflight checks ###
-if "${CONTENERIZED}"; then
-    container_prepare
+if "${IN_CONTAINER}"; then
+    if "${APPLE_CONTAINER}"; then
+        container_prepare
+    else
+        docker_prepare
+    fi
 fi
 
 getjdk "${SCRIPT_DIR}"
 
 has_command java "Please install JDK."
 has_command jar "Please install JDK, JRE is nice, but not sufficient."
-if ! "${CONTENERIZED}"; then
+has_command perl "Please install perl."
+if ! "${IN_CONTAINER}"; then
     has_command ldd
     has_command file
 fi
 
 
-export JAVA_HOME="${SCRIPT_DIR}/utils/jdk"
-
 NEEDED_EXECUTABLES=(
-    "${JAVA_HOME}/bin/javac"
-    "${JAVA_HOME}/bin/jar"
+    "${SCRIPT_DIR}/utils/jdk/bin/javac"
     "${SCRIPT_DIR}/utils/JXE2JAR"
 )
 
@@ -443,14 +453,14 @@ if [[ ${#MISSING_X[@]} -gt 0 ]]; then
     esac
 fi
 
-if ! file "${JAVA_HOME}/bin/javac" | grep -q "32-bit"; then
+if ! file "${SCRIPT_DIR}/utils/jdk/bin/javac" | grep -q "32-bit"; then
     echo "Error: cannot recognize javac binary"
     exit 1
 fi
 
-if ! "${CONTENERIZED}" && ! ldd "${JAVA_HOME}/bin/javac" >/dev/null 2>&1; then
+if ! "${IN_CONTAINER}" && ! ldd "${SCRIPT_DIR}/utils/jdk/bin/javac" >/dev/null 2>&1; then
     echo "Error: Cannot execute 32-bit javac. Make sure lib32-gcc-libs is installed:"
-    ldd "${JAVA_HOME}/bin/javac" || true
+    ldd "${SCRIPT_DIR}/utils/jdk/bin/javac" || true
     exit 1
 fi
 
@@ -504,7 +514,7 @@ elif [[ "${MODE}" == "build" ]]; then
     for f in "${FILES[@]}"; do
         echo "Compiling ${f}"
         x86 "${SOURCE}" "$(dirname "${CLASSPATH}")" -- \
-          "${JAVA_HOME}/bin/javac" -source 1.2 -target 1.2 -cp ".:${CLASSPATH}" "${f}"
+          "${SCRIPT_DIR}/utils/jdk/bin/javac" -source 1.2 -target 1.2 -cp ".:${CLASSPATH}" "${f}"
     done
 
     CLASSES=()
