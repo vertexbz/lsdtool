@@ -10,6 +10,7 @@ Based on https://gitlab.com/alelec/mib2-lsd-patching/, this tool provides some a
 * git - only to clone the repository, not really used by the tool itself
 * curl - to download the j9 JDK
 * unzip - to unpack the downloaded j9 JDK
+* java, jar - part of OpenJDK package. Any version should do
 
 And:
 * x86 32bit libc - required to run 32bit j9 JDK
@@ -19,7 +20,7 @@ And:
 * file & ldd - pre-run checks
 
 Or:
-* docker
+* docker / apple container
 
 
 # Installation

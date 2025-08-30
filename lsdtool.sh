@@ -128,7 +128,7 @@ getjdk() {
 
     local target_jdk="${target}/utils/jdk"
     local target_bin="${target_jdk}/bin"
-    if [[ -e "${target_bin}/java" ]] && [[ -e "${target_bin}/javac" ]] && [[ -e "${target_bin}/jar" ]]; then
+    if [[ -e "${target_bin}/javac" ]]; then
         return 0
     fi
 
@@ -391,13 +391,12 @@ fi
 
 getjdk "${SCRIPT_DIR}"
 
+has_command java "Please install JDK."
+has_command jar "Please install JDK, JRE is nice, but not sufficient."
 if ! "${CONTENERIZED}"; then
-    has_command java "Please install java." # jar in the 32-bit JDK works, so we just need any java to run decompiler
-    # has_command jar "Please install JDK, JRE is nice, but not sufficient."
-    # has_command ldd # we use ldd only on Linux/WSL, and there it is always present.
+    has_command ldd
     has_command file
 fi
-# has_command perl "Please install perl." # no longer neccessary
 
 
 export JAVA_HOME="${SCRIPT_DIR}/utils/jdk"
@@ -471,8 +470,7 @@ if [[ "${MODE}" == "jxe" ]]; then
       "${SCRIPT_DIR}/utils/JXE2JAR" "${SOURCE}" "${SOURCE_JAR}"
 
     echo "Decompiling ${SOURCE_JAR} -> ${DESTINATION}"
-    x86 "${SOURCE_DIR}" "${DESTINATION}" -- \
-      "java" -Xmx6g -jar "${SCRIPT_DIR}/utils/cfr-0.152.jar" --previewfeatures false --switchexpression false --outputdir "${DESTINATION}" "${SOURCE_JAR}"
+    java -Xmx6g -jar "${SCRIPT_DIR}/utils/cfr-0.152.jar" --previewfeatures false --switchexpression false --outputdir "${DESTINATION}" "${SOURCE_JAR}"
 elif [[ "${MODE}" == "jar" ]]; then
     SOURCE="$(sanitize_path "${1:-lsd.jar}")"
     DESTINATION="$(sanitize_path "${2:-lsd_java}")"
@@ -482,8 +480,7 @@ elif [[ "${MODE}" == "jar" ]]; then
     confirm_overwrite "${DESTINATION}"
 
     echo "Decompiling ${SOURCE} -> ${DESTINATION}"
-    x86 "${SOURCE_DIR}" "${DESTINATION}" -- \
-      "java" -Xmx6g -jar "${SCRIPT_DIR}/utils/cfr-0.152.jar" --previewfeatures false --switchexpression false --outputdir "${DESTINATION}" "${SOURCE}"
+    java -Xmx6g -jar "${SCRIPT_DIR}/utils/cfr-0.152.jar" --previewfeatures false --switchexpression false --outputdir "${DESTINATION}" "${SOURCE}"
 elif [[ "${MODE}" == "build" ]]; then
     SOURCE="$(sanitize_path "${1:-patch}")"
     DESTINATION="$(sanitize_path "${2:-$SOURCE.jar}")"
@@ -493,14 +490,10 @@ elif [[ "${MODE}" == "build" ]]; then
     f_exists "${CLASSPATH}"
     confirm_overwrite "${DESTINATION}"
 
-    while IFS= read -r file; do
-        FILES+=("$file")
-    done < <(find "$SOURCE" -type f -name '*.java')
-    if [[ "${CLEANUP:-true}" == true ]]; then
-        for f in "${FILES[@]}"; do
-            cleanup_java "$f"
-        done
-    fi
+    FILES=()
+    for file in "${SOURCE}"/**/*.java; do
+        FILES+=("${file}")
+    done
 
     if "${CLEANUP}"; then
         for f in "${FILES[@]}"; do
@@ -519,6 +512,5 @@ elif [[ "${MODE}" == "build" ]]; then
         CLASSES+=("${f%.java}.class")
     done
 
-    x86 "${SOURCE}" "$(dirname "${DESTINATION}")" -- \
-      "${JAVA_HOME}/bin/jar" cvf "${DESTINATION}" "${CLASSES[@]}"
+    jar cvf "${DESTINATION}" "${CLASSES[@]}"
 fi
