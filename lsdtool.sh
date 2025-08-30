@@ -215,7 +215,7 @@ sanitize_path() {
     if [[ "${input}" = /* ]]; then
         path="${input}"
     else
-        path="./${input}"
+        path="./${input}" # todo what if already starts from ./ or ../ ?
     fi
 
     echo "$path"
@@ -360,7 +360,7 @@ if [[ -z "${MODE}" ]]; then
 fi
 
 ### Install ###
-if [[ "${MODE}" == "install" ]]; then # TODO extract to install.sh?
+if [[ "${MODE}" == "install" ]]; then
     INSTALL_DIR="$HOME/.local/share/lsdtool"
     SYMLINK="$HOME/.local/bin/lsdtool"
     echo "Installing lsdtool to $INSTALL_DIR"
@@ -406,7 +406,7 @@ getjdk "${SCRIPT_DIR}"
 
 has_command java "Please install JDK."
 has_command jar "Please install JDK, JRE is nice, but not sufficient."
-has_command perl "Please install perl."
+has_command awk "Please install awk."
 if ! "${IN_CONTAINER}"; then
     has_command ldd
     has_command file
