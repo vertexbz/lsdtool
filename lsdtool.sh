@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s nullglob
 export LC_ALL=C.UTF-8
 
 if [[ $EUID -eq 0 ]]; then
